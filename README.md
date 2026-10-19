@@ -1,71 +1,107 @@
 # Chess / LM
 
-A responsive chess game set on a spare, monochrome shore. You play White against Stockfish at UCI Skill Level 8 while three constrained model roles read the engine's legal candidate lines from different strategic angles.
+Play White against Death, powered by Stockfish 18 at Skill Level 8. Compare the engine’s candidate replies with a language model’s explanation of the turn.
 
-**Live game:** [milwrite.github.io/chess-lm](https://milwrite.github.io/chess-lm/)
+**Cloudflare deployment target:** [chess-lm.ailab-452.workers.dev](https://chess-lm.ailab-452.workers.dev/)
 
-## What is here
+The application and coach API deploy together as one Cloudflare Worker. This address is the configured target; a successful deployment and real coaching response must be verified for each release.
 
-- A legal, draggable, click-to-move board powered by `chess.js` and `react-chessboard`.
-- Stockfish 18 Lite in a dedicated browser worker, configured with `Skill Level 8` and three principal variations.
-- New game, undo, board flip, sound, move history, check and game-over states, and promotion.
-- A responsive council that turns Stockfish evidence into brief positional, tactical, and structural guidance.
-- Chess Coach uses `deepseek-v4-flash:cloud` through Ollama Cloud to explain what your move changed and how to meet Stockfish’s candidate replies.
-- Desktop and mobile layouts shaped from original interface concepts and an original shoreline image.
-- A GitHub Pages release workflow that tests, lints, builds, and deploys every push to `main`.
+## Playing
 
-## Model guidance set
+Tap a white piece and its destination, drag a piece, or open **More controls** to choose a legal move by notation. Pawn promotion offers a queen, rook, bishop, or knight. Undo cancels an unfinished engine search and returns to your previous turn. Flip board also moves the player labels beside their pieces.
 
-[`model/council-prompts.json`](model/council-prompts.json) defines The Witness, The Knight, and The Bishop. Each role receives the current FEN plus three legal Stockfish candidates and must select one candidate in a one-sentence response. Stockfish `bestmove` remains the move played on the board.
+The complete PGN saves in this browser and restores on reload, including an unfinished engine turn. **Save PGN** downloads a portable copy, and **Open PGN** restores a legal game from a PGN file. Private browsing and blocked storage can prevent local saves; the interface reports save failures. A new game asks before replacing an existing game.
 
-[`model/evals/positions.json`](model/evals/positions.json) supplies six legal evaluation positions. The validation script checks FEN legality, prompt structure, role identifiers, and the candidate-move gate. The browser uses a deterministic local renderer today, while [`model/README.md`](model/README.md) describes a provider-neutral server adapter for future language-model calls.
+The previous [GitHub Pages address](https://milwrite.github.io/chess-lm/) and the Cloudflare address have separate browser storage. A saved game cannot transfer automatically between them. Import its PGN at the Cloudflare address before continuing. The older Pages interface did not include a download control; to recover an existing save, open its browser console on the original address and run this local download snippet:
 
-The chess game and Stockfish engine run in the browser. A small server route sends bounded position data to Ollama Cloud, while the Ollama credential stays in Railway and outside the public bundle. The coach explains supplied lines, and Stockfish remains responsible for every move played by Death.
+```js
+const pgn = localStorage.getItem('chess-lm-pgn');
+if (!pgn) throw new Error('No saved game was found in this browser');
+const url = URL.createObjectURL(new Blob([pgn], { type: 'application/x-chess-pgn' }));
+const link = Object.assign(document.createElement('a'), { href: url, download: 'chess-lm.pgn' });
+link.click();
+setTimeout(() => URL.revokeObjectURL(url), 1000);
+```
 
-## Chess Coach
+This reads only that browser’s saved chess game and downloads it locally. Recovery requires access to the browser that holds the original save.
 
-The browser sends the current FEN, recent PGN, player move, Stockfish reply, and three legal Stockfish candidates to `POST /api/coach`. The server validates the position, caps request size, caches repeated positions briefly, and calls `deepseek-v4-flash:cloud` in direct response mode. Stockfish has already played its move and calculated the comparison lines, so the language model can concentrate on a concise explanation. The response contains plain coaching prose plus the model name; the browser receives no provider credential.
+The CAIL Games link returns to the arcade collection. The interface uses the Lab’s existing logo, a monochrome board, and restrained hover color. It contains no generated background artwork. Coaching and engine lines move below the board on smaller screens, and the primary controls keep 44-pixel touch targets.
 
-Current chess-language research supports this division of labor. ChessArena reports that general language models still fall below a modest chess engine, while its chess-tuned Qwen3-8B improves sharply. ChessQA places DeepSeek and Qwen families among strong open models for chess understanding. Chess / LM therefore uses the language model for explanation and retains Stockfish for legal move selection.
+## Engine and model responsibilities
 
-## Run locally
+- `chess.js` validates moves and game endings.
+- Stockfish 18 Lite runs in a browser worker at Skill Level 8 and supplies up to three principal variations. It owns every move made by Death. Search time is capped at 1.5 seconds, with separate startup, response, and cancellation deadlines. Replaced searches finish their cancellation handshake before another position is sent.
+- **Engine lines** are the actual legal candidate lines reported by Stockfish, with evaluations from White’s side. Positions with fewer candidates show fewer lines.
+- **Chess coach** sends the played turn and engine evidence to the same-origin `/api/coach` route. The Worker validates the request and calls the CAIL Gateway through a service binding. The configured model is Gemma 4 26B A4B, `@cf/google/gemma-4-26b-a4b-it`, from the [CAIL model registry](https://ailab.gc.cuny.edu/models/). An unavailable coach does not stop the game. Its prose can still make mistakes, so compare it with the board and engine evidence.
+
+The reusable council prompts and evaluation positions remain in [`model/`](model/README.md) for workshop experimentation. The live interface uses the factual Engine lines display in place of the old deterministic adviser prose.
+
+## Local development
+
+Use Node 22.12 or newer:
 
 ```bash
-npm install
+npm ci
+npm run build
+cp .dev.vars.example .dev.vars
+```
+
+Configure the application’s `CAIL_GATEWAY_KEY` in the ignored `.dev.vars` file. This is a server-side CAIL application credential. Never put it in browser code or a `VITE_` variable.
+
+Run the Worker and Vite in separate terminals:
+
+```bash
+npm start
 npm run dev
 ```
 
-Run the coach service in another terminal:
+`npm start` runs Wrangler at `http://127.0.0.1:8797`. Vite serves the interface at the root path and proxies `/api` and `/health` to that Worker. The service binding must connect to a running development Gateway or an explicitly configured remote Gateway for real coaching. The board and Stockfish can be developed without a working Gateway; local chess play does not require a model request.
 
-```bash
-cp .env.example .env.local
-set -a; source .env.local; set +a
-npm start
-```
+## Worker and coach contract
 
-Add `OLLAMA_API_KEY` to `.env.local` before starting the server. The example file contains variable names and public defaults only.
+`worker/index.js` serves the built assets and API. `POST /api/coach` accepts `beforeFen`, `fen` after the reply, full PGN, the player and engine SAN moves, and one to three unique candidates. Each candidate includes SAN, evaluation, and a legal SAN continuation from `beforeFen`. The Worker verifies the entire turn before making a model call and sends only the last 16 moves. Clients may omit `beforeFen` when their complete PGN proves it.
 
-Before a release:
+The browser calls its own origin. Credentials stay in the Worker, and the `GATEWAY` service binding connects to `cail-model-api`. There is no direct browser provider credential or separate Railway coach service in this architecture.
+
+Configuration in [`wrangler.jsonc`](wrangler.jsonc):
+
+| Binding or variable | Value | Purpose |
+| --- | --- | --- |
+| `ASSETS` | Built `dist/` directory | Frontend, engine and static assets |
+| `GATEWAY` | `cail-model-api` | Internal CAIL model service |
+| `CAIL_GATEWAY_KEY` | Worker secret | Application authorization and Gateway spend accounting |
+| `COACH_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | Configured coach model |
+| `PUBLIC_ORIGIN` | `https://chess-lm.ailab-452.workers.dev` | Public application origin |
+| `REQUEST_LIMIT` | 12 requests per 60 seconds | Per-client native rate-limit binding |
+| `GLOBAL_LIMIT` | 60 requests per 60 seconds | Shared application rate-limit binding |
+| `RELEASE` | Set when releasing | Deployment identification |
+
+Cloudflare’s native rate limits apply at a Cloudflare location. Despite its binding name, `GLOBAL_LIMIT` is not a strict worldwide request ceiling. The Gateway’s application spend controls provide a separate model budget boundary. A Worker rate-limit response and a Gateway budget response must remain failures rather than triggering extra provider calls.
+
+`GET /health` reports configuration readiness, not a successful model probe. Release acceptance includes a real `/api/coach` response with nonempty commentary and the model actually returned by the Gateway.
+
+## Validation and release
 
 ```bash
 npm test
 npm run lint
 npm run build
+npm run check:worker
 ```
 
-## Structure
+Tests cover engine cancellation and stale messages, timeout/restart behavior, saved games, constrained candidate sets, and Worker coach behavior. Before publishing, play a complete human/Stockfish turn at desktop and mobile widths, then check reload, undo, promotion, PGN import/export, and a real coach reply.
 
-- `src/engine/` — Stockfish worker protocol, UCI parsing, and chess notation.
-- `src/model/` — deterministic engine-grounded council renderer.
-- `server/` — validated Ollama Cloud proxy with a short response cache.
-- `model/` — reusable role prompts, contract, and evaluation set.
-- `docs/design/` — generated desktop and mobile concepts plus implementation captures.
-- `public/engine/` — Stockfish 18 Lite JavaScript, WebAssembly, and license.
-- `.github/workflows/deploy.yml` — GitHub Pages release.
-- `railway.json` — Railway health and start configuration for the coach service.
+The GitHub workflow validates changes; it does not deploy GitHub Pages or automatically publish the Worker. Provision the Worker’s CAIL application secret through Wrangler’s secret handling before a release that needs coaching, then deploy the built application with `npm run deploy`. Verify the serving release, asset routes, and actual coach response after deployment. CAIL Games has a separate repository and collection entry.
 
-## Open-source foundation
+## Structure and licenses
 
-The board uses [chess.js](https://github.com/jhlywa/chess.js) for rules and [react-chessboard](https://github.com/Clariity/react-chessboard) for responsive interaction. The opponent uses [Stockfish.js](https://github.com/nmrugg/stockfish.js), which packages the [Stockfish](https://github.com/official-stockfish/Stockfish) engine for browsers. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the full license list.
+- `src/engine/` — worker lifecycle, UCI parsing and notation
+- `src/game/` — saved-game recovery, PGN handling and turn undo
+- `src/components/` — board-adjacent controls and analysis
+- `src/model/` — legal candidate formatting and same-origin coach client
+- `worker/` — Cloudflare request handling, validated coaching and Gateway access
+- `model/` — experimental role prompts and evaluation positions
+- `public/engine/` — Stockfish 18 Lite, WebAssembly and license
+- `docs/design/` — archived design studies, not runtime assets
 
-Chess / LM is distributed under GPL-3.0-only because it includes Stockfish.js.
+[chess.js](https://github.com/jhlywa/chess.js), [react-chessboard](https://github.com/Clariity/react-chessboard), and [Stockfish.js](https://github.com/nmrugg/stockfish.js) provide the rules, board and engine. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Chess / LM is distributed under GPL-3.0-only because it includes Stockfish.js.

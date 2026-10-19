@@ -1,29 +1,25 @@
 # Chess / LM model guide
 
-The council and Chess Coach form a guidance set built for one narrow task: explain legal candidate moves from Stockfish at UCI Skill Level 8 while Stockfish retains authority over the board.
+The running game separates engine evidence from model commentary. Stockfish chooses every move made by Death. The language model explains the played turn and may make mistakes; it cannot change the board.
 
-## Contract
+## Engine evidence
 
-The browser asks Stockfish for three principal variations. Each council role receives the same FEN, candidate moves, evaluations, and continuations, then reads a different part of the position:
+Stockfish runs in a dedicated browser worker with Skill Level 8 and MultiPV 3. The interface displays up to three distinct legal candidate replies, their evaluations for White, and short continuations. It does not repeat candidates when a position has fewer lines. These rows are labeled **Engine lines** and come directly from the engine.
 
-- The Witness covers material, king safety, and the immediate threat.
-- The Knight covers checks, captures, threats, and tempo.
-- The Bishop covers pawn structure, development, space, and piece activity.
+## Coach contract
 
-Each local adviser selects one supplied candidate, preserves its notation, and stays within one sentence. The interface also sends the FEN after Death's move, PGN, player move, Stockfish reply, and the same three candidates to `server/index.mjs`, which calls `deepseek-v4-flash:cloud` through Ollama Cloud. Provider credentials remain on that server route.
+The browser sends the FEN before and after Death’s reply, complete PGN, the player move, engine reply, and the supplied candidates to the same-origin `POST /api/coach` route. The Cloudflare Worker replays the PGN, checks both positions and played moves, and verifies each candidate continuation before inference. Only the last 16 moves and bounded candidate evidence enter the prompt.
 
-## Move authority
+The Worker calls the CAIL Gateway through the `GATEWAY` service binding to `cail-model-api`. Its `CAIL_GATEWAY_KEY` stays in a Worker secret, never in the frontend. The configured `COACH_MODEL` is Gemma 4 26B A4B, `@cf/google/gemma-4-26b-a4b-it`, from the [CAIL model registry](https://ailab.gc.cuny.edu/models/). Model changes should preserve registry eligibility and be checked against the same legal position evidence. This configuration is a deployment choice, not a benchmark claim about chess ability.
 
-Stockfish runs in a dedicated Web Worker with `Skill Level` set to `8` and `MultiPV` set to `3`. `chess.js` validates both the player move and Stockfish `bestmove`. Council and coach output remain commentary, which gives the model useful evidence while keeping move authority with the engine.
+The coach is asked to explain the played reply and give a practical plan in two connected sentences. Stockfish retains move authority. Short prompts and legal evidence reduce unsupported claims, but they do not establish that every explanation is correct. A missing or failed coach response leaves the local chess game playable.
 
-## Evaluation set
+The Worker’s native per-client and shared request limits apply at individual Cloudflare locations. Gateway application spend controls provide the separate model budget boundary. Configuration readiness alone is insufficient: release verification must include nonempty coaching from the deployed route and the model ID actually served.
 
-`evals/positions.json` provides legal positions that cover development, king safety, pawn structure, tactical tempo, and endgames. `npm run validate:model` checks each FEN, the prompt schema, unique role identifiers, and the move gate.
+## Workshop materials
 
-## Extending the set
+`council-prompts.json` preserves three experimental roles: The Witness, The Knight, and The Bishop. These prompts are reusable teaching materials. The former browser council was deterministic prose, not three live model calls; the current interface displays engine evidence without implying otherwise.
 
-The server adapter keeps provider credentials outside the browser and supplies only the three engine candidates. The deterministic advisers remain visible while the coach loads or pauses. The same positions can seed a larger evaluation set by recording whether a reply quotes a supplied move faithfully and limits its claims to engine evidence.
+`evals/positions.json` contains six positions spanning development, king safety, structure, tactics, and endings. `npm run validate:model` checks legal FENs, role identifiers, prompt structure, and candidate gates. These structural checks do not measure coaching quality.
 
-## Model choice
-
-Ollama’s current catalog names the fast model `deepseek-v4-flash:cloud`; the catalog also offers the larger `deepseek-v4-pro:cloud` and `qwen3.5:cloud`. Chess-specific evidence remains limited for the new V4 models, so the implementation favors Flash for short latency and uses Stockfish candidates as its factual boundary. Change `OLLAMA_MODEL` on the server to compare another Ollama Cloud model without rebuilding the game.
+A future evaluation can compare each explanation against the played move and supplied engine line, record factual errors, and ask a player whether the suggested plan was useful. Preserve the model ID and request evidence with any such result. Players can export and import PGN to retain or revisit a game; those files also allow the legal move history to be checked independently.

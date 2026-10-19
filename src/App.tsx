@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Chess, type Move, type Square } from 'chess.js'
+import { Chess, type Square } from 'chess.js'
 import { Chessboard, type ChessboardOptions } from 'react-chessboard'
 import {
+  ArrowLeft,
+  Download,
+  Upload,
   FlipHorizontal2,
   Plus,
   RotateCcw,
@@ -9,76 +12,144 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react'
-import { BrandMark } from './components/BrandMark'
 import { ChessCoach } from './components/ChessCoach'
 import { Council } from './components/Council'
 import { MoveLedger } from './components/MoveLedger'
 import { PlayerBar } from './components/PlayerBar'
 import { StockfishClient } from './engine/StockfishClient'
 import { parseUciMove } from './engine/uci'
-import {
-  buildCouncilReading,
-  type CouncilReading,
-  type GuideId,
-} from './model/modelGuide'
+import { restoreGame, saveGame, undoPlayerTurn } from './game/persistence'
+import { buildCouncilReading, type CouncilReading } from './model/modelGuide'
 import {
   INITIAL_COACH_STATE,
   requestCoach,
   type CoachRequest,
   type CoachState,
-} from './model/ollamaCoach'
+} from './model/coachClient'
 import './App.css'
 
 type EngineState = 'loading' | 'ready' | 'error'
+type Promotion = 'q' | 'r' | 'b' | 'n'
+const promotionPieces: [Promotion, string][] = [
+  ['q', 'Queen'],
+  ['r', 'Rook'],
+  ['b', 'Bishop'],
+  ['n', 'Knight'],
+]
 
-function gameStatus(game: Chess, thinking: boolean, engineState: EngineState) {
-  if (engineState === 'loading') return 'Engine loading'
-  if (engineState === 'error') return 'Engine unavailable'
-  if (game.isCheckmate()) return game.turn() === 'w' ? 'Death wins' : 'You win'
-  if (game.isDraw()) return 'Draw'
-  if (game.isCheck()) return thinking ? 'Death considers' : 'Check'
-  return thinking ? 'Death considers' : 'Your move'
+function gameStatus(game: Chess, engineState: EngineState) {
+  if (game.isCheckmate())
+    return game.turn() === 'w'
+      ? 'Checkmate · Death wins'
+      : 'Checkmate · You win'
+  if (game.isStalemate()) return 'Draw · Stalemate'
+  if (game.isThreefoldRepetition()) return 'Draw · Repetition'
+  if (game.isInsufficientMaterial()) return 'Draw · Insufficient material'
+  if (game.isDraw()) return 'Draw · Fifty-move rule'
+  if (engineState === 'loading') return 'Loading engine'
+  if (engineState === 'error') return 'Engine paused'
+  if (game.turn() === 'b') return 'Death is thinking'
+  return game.isCheck() ? 'Check · Your move' : 'Your move'
 }
 
 function App() {
-  const gameRef = useRef(new Chess())
+  const [game] = useState(() => {
+    try {
+      return restoreGame(window.localStorage)
+    } catch {
+      return new Chess()
+    }
+  })
   const engineRef = useRef<StockfishClient | null>(null)
   const searchIdRef = useRef(0)
   const audioRef = useRef<AudioContext | null>(null)
+  const soundRef = useRef(false)
   const coachAbortRef = useRef<AbortController | null>(null)
   const lastCoachRequestRef = useRef<CoachRequest | null>(null)
-  const [fen, setFen] = useState(gameRef.current.fen())
-  const [history, setHistory] = useState<Move[]>([])
+  const promotionRef = useRef<HTMLButtonElement>(null)
+  const newGameRef = useRef<HTMLButtonElement>(null)
+  const keepPlayingRef = useRef<HTMLButtonElement>(null)
+  const boardRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [importError, setImportError] = useState('')
+  const [pendingImport, setPendingImport] = useState<Chess | null>(null)
+  const [fen, setFen] = useState(game.fen())
   const [orientation, setOrientation] = useState<'white' | 'black'>('white')
-  const [lastMove, setLastMove] = useState<[string, string] | null>(null)
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null)
-  const [legalSquares, setLegalSquares] = useState<string[]>([])
-  const [thinking, setThinking] = useState(false)
+  const [promotion, setPromotion] = useState<{
+    from: string
+    to: string
+  } | null>(null)
   const [engineState, setEngineState] = useState<EngineState>('loading')
   const [engineError, setEngineError] = useState('')
   const [council, setCouncil] = useState<CouncilReading | null>(null)
   const [coach, setCoach] = useState<CoachState>(INITIAL_COACH_STATE)
-  const [activeGuide, setActiveGuide] = useState<GuideId>('witness')
   const [activeTab, setActiveTab] = useState<'moves' | 'method'>('moves')
-  const [soundOn, setSoundOn] = useState(true)
+  const [soundOn, setSoundOn] = useState(false)
+  const [confirmNew, setConfirmNew] = useState(false)
+  const [storageAvailable, setStorageAvailable] = useState(true)
+  const [keyboardMove, setKeyboardMove] = useState('')
+  const [reducedMotion] = useState(
+    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  )
+  const history = game.history({ verbose: true })
+  const lastMove = history.at(-1)
+  const thinking =
+    engineState === 'ready' && game.turn() === 'b' && !game.isGameOver()
+  const playable =
+    engineState === 'ready' && game.turn() === 'w' && !game.isGameOver()
+  const legalMoves = game.moves({ verbose: true })
+  const legalSquares = selectedSquare
+    ? legalMoves
+        .filter((move) => move.from === selectedSquare)
+        .map((move) => move.to)
+    : []
 
   useEffect(() => {
-    const engine = new StockfishClient(import.meta.env.BASE_URL)
-    engineRef.current = engine
-    engine
-      .ready()
-      .then(() => setEngineState('ready'))
-      .catch((error: Error) => {
-        setEngineState('error')
-        setEngineError(error.message)
-      })
-
+    let active = true
+    let engine: StockfishClient | null = null
+    try {
+      engine = new StockfishClient(import.meta.env.BASE_URL)
+      engineRef.current = engine
+      engine
+        .ready()
+        .then(() => {
+          if (active) setEngineState('ready')
+        })
+        .catch((error: Error) => {
+          if (active) {
+            setEngineState('error')
+            setEngineError(error.message)
+          }
+        })
+    } catch {
+      setEngineState('error')
+      setEngineError('This browser could not start Stockfish.')
+    }
     return () => {
+      active = false
       searchIdRef.current += 1
       coachAbortRef.current?.abort()
-      engine.terminate()
+      engine?.terminate()
       engineRef.current = null
+      void audioRef.current?.close().catch(() => {})
+      audioRef.current = null
     }
+  }, [])
+
+  useEffect(() => {
+    if (promotion) promotionRef.current?.focus()
+  }, [promotion])
+
+  useEffect(() => {
+    if (confirmNew || pendingImport) keepPlayingRef.current?.focus()
+  }, [confirmNew, pendingImport])
+
+  const clearCoach = useCallback(() => {
+    coachAbortRef.current?.abort()
+    coachAbortRef.current = null
+    lastCoachRequestRef.current = null
+    setCoach(INITIAL_COACH_STATE)
   }, [])
 
   const runCoach = useCallback(async (position: CoachRequest) => {
@@ -88,9 +159,8 @@ function App() {
     lastCoachRequestRef.current = position
     setCoach({
       status: 'loading',
-      message: 'DeepSeek is reading the position and Stockfish lines.',
+      message: 'The coach is reading this turn and Stockfish’s lines.',
     })
-
     try {
       const result = await requestCoach(position, controller.signal)
       if (coachAbortRef.current !== controller) return
@@ -101,349 +171,554 @@ function App() {
         cached: result.cached,
       })
     } catch (error) {
-      if (controller.signal.aborted || coachAbortRef.current !== controller) return
+      if (controller.signal.aborted || coachAbortRef.current !== controller)
+        return
       setCoach({
         status: 'error',
-        message: error instanceof Error ? error.message : 'Chess Coach paused unexpectedly.',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'The coach could not read this turn.',
       })
     }
-  }, [])
-
-  const retryCoach = useCallback(() => {
-    if (lastCoachRequestRef.current) void runCoach(lastCoachRequestRef.current)
-  }, [runCoach])
-
-  const clearCoach = useCallback(() => {
-    coachAbortRef.current?.abort()
-    coachAbortRef.current = null
-    lastCoachRequestRef.current = null
-    setCoach(INITIAL_COACH_STATE)
   }, [])
 
   const syncGame = useCallback(() => {
-    const game = gameRef.current
     setFen(game.fen())
-    setHistory(game.history({ verbose: true }))
+    setKeyboardMove('')
     try {
-      window.localStorage.setItem('chess-lm-pgn', game.pgn())
+      setStorageAvailable(saveGame(game, window.localStorage))
     } catch {
-      // The game remains playable when storage is unavailable.
+      setStorageAvailable(false)
+    }
+  }, [game])
+
+  const playMoveSound = useCallback(() => {
+    if (!soundRef.current) return
+    try {
+      const context = audioRef.current ?? new AudioContext()
+      audioRef.current = context
+      void context.resume().catch(() => {})
+      const oscillator = context.createOscillator()
+      const gain = context.createGain()
+      oscillator.frequency.setValueAtTime(164, context.currentTime)
+      gain.gain.setValueAtTime(0.0001, context.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.045, context.currentTime + 0.01)
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.12)
+      oscillator.connect(gain)
+      gain.connect(context.destination)
+      oscillator.start()
+      oscillator.stop(context.currentTime + 0.13)
+      oscillator.onended = () => {
+        oscillator.disconnect()
+        gain.disconnect()
+      }
+    } catch {
+      /* Sound is optional; it never interrupts a legal move. */
     }
   }, [])
 
-  const playMoveSound = useCallback(() => {
-    if (!soundOn) return
-    const AudioContextClass = window.AudioContext
-    const context = audioRef.current ?? new AudioContextClass()
-    audioRef.current = context
-    const oscillator = context.createOscillator()
-    const gain = context.createGain()
-    oscillator.type = 'sine'
-    oscillator.frequency.setValueAtTime(164, context.currentTime)
-    gain.gain.setValueAtTime(0.0001, context.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.045, context.currentTime + 0.01)
-    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.12)
-    oscillator.connect(gain)
-    gain.connect(context.destination)
-    oscillator.start()
-    oscillator.stop(context.currentTime + 0.13)
-  }, [soundOn])
-
-  const askDeathToMove = useCallback(async () => {
-    const game = gameRef.current
+  useEffect(() => {
     const engine = engineRef.current
-    if (!engine || game.isGameOver() || game.turn() !== 'b') return
-
-    const positionBeforeSearch = game.fen()
-    const playerMove = game.history({ verbose: true }).at(-1)?.san ?? '—'
+    if (
+      engineState !== 'ready' ||
+      !engine ||
+      game.isGameOver() ||
+      game.turn() !== 'b'
+    )
+      return
+    const beforeFen = game.fen()
+    const playerMove = game.history().at(-1) ?? ''
     const searchId = ++searchIdRef.current
-    setThinking(true)
-    setSelectedSquare(null)
-    setLegalSquares([])
-
-    try {
-      const analysis = await engine.analyze(positionBeforeSearch)
-      if (searchId !== searchIdRef.current) return
-
-      const reading = buildCouncilReading(positionBeforeSearch, analysis)
-      setCouncil(reading)
-      setActiveGuide('witness')
-
-      await new Promise((resolve) => window.setTimeout(resolve, 460))
-      if (searchId !== searchIdRef.current) return
-
-      const move = game.move(parseUciMove(analysis.bestMove))
-      if (!move) throw new Error('Stockfish returned a move the board could not apply.')
-
-      setLastMove([move.from, move.to])
-      playMoveSound()
-      syncGame()
-      setEngineError('')
-      void runCoach({
-        fen: game.fen(),
-        pgn: game.pgn(),
-        playerMove,
-        engineMove: move.san,
-        candidates: reading.advisers.map(({ move: candidate, evaluation, continuation }) => ({
-          move: candidate,
-          evaluation,
-          continuation,
-        })),
-      })
-    } catch (error) {
-      if (searchId !== searchIdRef.current) return
-      setEngineState('error')
-      setEngineError(error instanceof Error ? error.message : 'The engine stopped unexpectedly.')
-    } finally {
-      if (searchId === searchIdRef.current) setThinking(false)
-    }
-  }, [playMoveSound, runCoach, syncGame])
-
-  const commitPlayerMove = useCallback(
-    (source: string, target: string) => {
-      const game = gameRef.current
-      if (
-        engineState !== 'ready' ||
-        thinking ||
-        game.isGameOver() ||
-        game.turn() !== 'w'
-      ) {
-        return false
-      }
-
-      try {
-        const move = game.move({
-          from: source,
-          to: target,
-          promotion: 'q',
-        })
-        if (!move) return false
-        setLastMove([move.from, move.to])
-        setSelectedSquare(null)
-        setLegalSquares([])
-        playMoveSound()
+    void engine
+      .analyze(beforeFen)
+      .then((analysis) => {
+        if (searchId !== searchIdRef.current || game.fen() !== beforeFen) return
+        const reading = buildCouncilReading(beforeFen, analysis)
+        game.move(parseUciMove(analysis.bestMove))
+        const reply = game.history().at(-1)!
+        setCouncil(reading)
+        setEngineError('')
         syncGame()
-        window.setTimeout(() => void askDeathToMove(), 180)
-        return true
-      } catch {
-        return false
-      }
-    },
-    [askDeathToMove, engineState, playMoveSound, syncGame, thinking],
-  )
-
-  const chooseSquare = useCallback(
-    (square: string) => {
-      if (thinking || engineState !== 'ready') return
-      const game = gameRef.current
-
-      if (selectedSquare && legalSquares.includes(square)) {
-        commitPlayerMove(selectedSquare, square)
-        return
-      }
-
-      const piece = game.get(square as Square)
-      if (!piece || piece.color !== 'w' || game.turn() !== 'w') {
-        setSelectedSquare(null)
-        setLegalSquares([])
-        return
-      }
-
-      const moves = game.moves({ square: square as Square, verbose: true })
-      setSelectedSquare(square)
-      setLegalSquares(moves.map((move) => move.to))
-    },
-    [commitPlayerMove, engineState, legalSquares, selectedSquare, thinking],
-  )
-
-  const resetGame = useCallback(() => {
-    searchIdRef.current += 1
-    gameRef.current.reset()
-    setCouncil(null)
-    clearCoach()
-    setLastMove(null)
-    setSelectedSquare(null)
-    setLegalSquares([])
-    setThinking(false)
-    setEngineError('')
-    if (engineRef.current) setEngineState('ready')
-    syncGame()
-  }, [clearCoach, syncGame])
-
-  const undoTurn = useCallback(() => {
-    if (thinking) return
-    searchIdRef.current += 1
-    const game = gameRef.current
-    if (!game.history().length) return
-    game.undo()
-    if (game.turn() === 'b' && game.history().length) game.undo()
-    setLastMove(null)
-    setCouncil(null)
-    clearCoach()
-    setSelectedSquare(null)
-    setLegalSquares([])
-    syncGame()
-  }, [clearCoach, syncGame, thinking])
-
-  const squareStyles = useMemo(() => {
-    const styles: Record<string, React.CSSProperties> = {}
-    lastMove?.forEach((square) => {
-      styles[square] = {
-        boxShadow: 'inset 0 0 0 3px rgba(129, 45, 42, .82)',
-      }
-    })
-    if (selectedSquare) {
-      styles[selectedSquare] = {
-        ...styles[selectedSquare],
-        boxShadow: 'inset 0 0 0 4px #91342f',
-      }
+        playMoveSound()
+        if (reading.advisers.length) {
+          void runCoach({
+            beforeFen,
+            fen: game.fen(),
+            pgn: game.pgn(),
+            playerMove,
+            engineMove: reply,
+            candidates: reading.advisers.map(
+              ({ move, evaluation, continuation }) => ({
+                move,
+                evaluation,
+                continuation,
+              }),
+            ),
+          })
+        }
+      })
+      .catch((error: Error) => {
+        if (searchId !== searchIdRef.current || error.name === 'AbortError')
+          return
+        setEngineState('error')
+        setEngineError(error.message)
+      })
+    return () => {
+      if (searchId === searchIdRef.current) searchIdRef.current += 1
+      engine.cancel()
     }
-    legalSquares.forEach((square) => {
-      styles[square] = {
-        ...styles[square],
-        backgroundImage:
-          'radial-gradient(circle, rgba(119, 38, 35, .86) 0 13%, transparent 15%)',
+  }, [fen, engineState, game, playMoveSound, runCoach, syncGame])
+
+  const commitPlayerMove = (
+    from: string,
+    to: string,
+    chosenPromotion?: Promotion,
+  ) => {
+    if (!playable || confirmNew || pendingImport) return false
+    const matches = game
+      .moves({ verbose: true })
+      .filter((move) => move.from === from && move.to === to)
+    if (!matches.length) return false
+    if (matches.some((move) => move.isPromotion()) && !chosenPromotion) {
+      setPromotion({ from, to })
+      return false
+    }
+    try {
+      game.move({ from, to, promotion: chosenPromotion })
+      clearCoach()
+      setCouncil(null)
+      setSelectedSquare(null)
+      setPromotion(null)
+      syncGame()
+      playMoveSound()
+      if (promotion)
+        window.requestAnimationFrame(() => boardRef.current?.focus())
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const chooseSquare = (square: string) => {
+    if (!playable || promotion || confirmNew || pendingImport) return
+    if (selectedSquare && legalSquares.includes(square as Square)) {
+      commitPlayerMove(selectedSquare, square)
+      return
+    }
+    const piece = game.get(square as Square)
+    setSelectedSquare(
+      piece?.color === 'w' && square !== selectedSquare ? square : null,
+    )
+  }
+
+  const restartEngine = async () => {
+    setEngineState('loading')
+    setEngineError('')
+    try {
+      let engine = engineRef.current
+      if (engine) await engine.restart()
+      else {
+        engine = new StockfishClient(import.meta.env.BASE_URL)
+        engineRef.current = engine
+        await engine.ready()
       }
-    })
-    return styles
-  }, [lastMove, legalSquares, selectedSquare])
+      if (engineRef.current === engine) setEngineState('ready')
+    } catch (error) {
+      setEngineState('error')
+      setEngineError(
+        error instanceof Error
+          ? error.message
+          : 'The engine could not restart.',
+      )
+    }
+  }
 
-  const boardOptions = useMemo<ChessboardOptions>(
-    () => ({
-      id: 'seventh-seal-board',
-      position: fen,
-      boardOrientation: orientation,
-      onPieceDrop: ({ sourceSquare, targetSquare }) =>
-        targetSquare ? commitPlayerMove(sourceSquare, targetSquare) : false,
-      onPieceClick: ({ square }) => {
-        if (square) chooseSquare(square)
-      },
-      onSquareClick: ({ square }) => chooseSquare(square),
-      canDragPiece: ({ piece }) =>
-        engineState === 'ready' &&
-        !thinking &&
-        gameRef.current.turn() === 'w' &&
-        piece.pieceType.startsWith('w'),
-      squareStyles,
-      allowDrawingArrows: true,
-      animationDurationInMs: 230,
-      boardStyle: {
-        borderRadius: 0,
-        boxShadow: '0 18px 48px rgba(0, 0, 0, .48)',
-      },
-      lightSquareStyle: { backgroundColor: '#d4d0c5' },
-      darkSquareStyle: { backgroundColor: '#272a29' },
-      lightSquareNotationStyle: {
-        color: '#272a29',
-        fontFamily: 'var(--ui-font)',
-        fontSize: 11,
-        fontWeight: 700,
-      },
-      darkSquareNotationStyle: {
-        color: '#d4d0c5',
-        fontFamily: 'var(--ui-font)',
-        fontSize: 11,
-        fontWeight: 700,
-      },
-    }),
-    [chooseSquare, commitPlayerMove, engineState, fen, orientation, squareStyles, thinking],
+  const clearTurn = () => {
+    searchIdRef.current += 1
+    engineRef.current?.cancel()
+    clearCoach()
+    setCouncil(null)
+    setSelectedSquare(null)
+    setPromotion(null)
+    setConfirmNew(false)
+    setPendingImport(null)
+  }
+
+  const resetGame = () => {
+    clearTurn()
+    game.reset()
+    syncGame()
+    newGameRef.current?.focus()
+    if (engineState === 'error') void restartEngine()
+  }
+
+  const undoTurn = () => {
+    clearTurn()
+    undoPlayerTurn(game)
+    syncGame()
+  }
+
+  const applyImport = (imported: Chess) => {
+    clearTurn()
+    game.loadPgn(imported.pgn())
+    syncGame()
+    boardRef.current?.focus()
+    if (engineState === 'error') void restartEngine()
+  }
+
+  const importGame = async (file?: File) => {
+    if (!file) return
+    setImportError('')
+    try {
+      if (file.size > 100_000)
+        throw new Error('Choose a PGN smaller than 100 KB.')
+      const imported = new Chess()
+      const text = await file.text()
+      if (!text.trim()) throw new Error('This PGN is empty.')
+      try {
+        imported.loadPgn(text)
+      } catch {
+        throw new Error('This file does not contain a valid chess game.')
+      }
+      if (game.history().length) setPendingImport(imported)
+      else applyImport(imported)
+    } catch (error) {
+      setImportError(
+        error instanceof Error
+          ? error.message
+          : 'This PGN could not be opened.',
+      )
+    }
+  }
+
+  const exportGame = () => {
+    const url = URL.createObjectURL(
+      new Blob([game.pgn()], { type: 'application/x-chess-pgn' }),
+    )
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'chess-lm.pgn'
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  const squareStyles: Record<string, React.CSSProperties> = {}
+  if (lastMove)
+    for (const square of [lastMove.from, lastMove.to])
+      squareStyles[square] = {
+        boxShadow: 'inset 0 0 0 2px rgba(255,255,255,.65)',
+      }
+  if (selectedSquare)
+    squareStyles[selectedSquare] = { boxShadow: 'inset 0 0 0 4px #f3c76b' }
+  for (const square of legalSquares)
+    squareStyles[square] = {
+      ...squareStyles[square],
+      backgroundImage:
+        'radial-gradient(circle, #f3c76bcc 0 17%, transparent 19%)',
+    }
+  const boardOptions: ChessboardOptions = {
+    id: 'chess-lm-board',
+    position: fen,
+    boardOrientation: orientation,
+    onPieceDrop: ({ sourceSquare, targetSquare }) =>
+      targetSquare ? commitPlayerMove(sourceSquare, targetSquare) : false,
+    onSquareClick: ({ square }) => chooseSquare(square),
+    canDragPiece: ({ piece }) =>
+      playable && !promotion && !confirmNew && !pendingImport && piece.pieceType.startsWith('w'),
+    squareStyles,
+    allowDrawingArrows: true,
+    animationDurationInMs: reducedMotion ? 0 : 160,
+    boardStyle: { borderRadius: 0 },
+    lightSquareStyle: { backgroundColor: '#deded7' },
+    darkSquareStyle: { backgroundColor: '#575c60' },
+    lightSquareNotationStyle: {
+      color: '#32363a',
+      fontSize: 12,
+      fontWeight: 600,
+    },
+    darkSquareNotationStyle: { color: '#fff', fontSize: 12, fontWeight: 600 },
+  }
+  const selectableMoves = useMemo(
+    () => new Chess(fen).moves({ verbose: true }),
+    [fen],
   )
-
-  const status = gameStatus(gameRef.current, thinking, engineState)
-  const shoreline = `${import.meta.env.BASE_URL}assets/shoreline.webp`
 
   return (
     <div className="app-shell">
-      <div
-        className="shoreline-scene"
-        style={{ backgroundImage: `url(${shoreline})` }}
-        aria-hidden="true"
-      />
+      <a className="skip-link" href="#game">
+        Skip to game
+      </a>
       <header className="site-header">
-        <a className="brand" href="#game" aria-label="Chess LM home">
-          <BrandMark />
-          <span>Chess / LM</span>
+        <a
+          className="suite-brand"
+          href="https://games.ailab-452.workers.dev/"
+          aria-label="CAIL Games"
+        >
+          <img
+            src={`${import.meta.env.BASE_URL}assets/cail-logo-white.png`}
+            alt="CUNY AI Lab"
+            width="1154"
+            height="259"
+          />
+          <span>Games</span>
         </a>
-        <a className="header-source" href="https://github.com/milwrite/chess-lm">
-          Source
+        <a className="back-link" href="https://games.ailab-452.workers.dev/">
+          <ArrowLeft aria-hidden="true" />
+          All games
         </a>
       </header>
-
-      <main id="game" className="game-shell">
-        <section
-          className="board-column"
-          aria-label="Chess board"
-          style={{ backgroundImage: `linear-gradient(rgba(9, 11, 11, 0.84), rgba(9, 11, 11, 0.94)), url(${shoreline})` }}
-        >
-          <PlayerBar side="death" />
-          <div className="board-frame">
-            <Chessboard options={boardOptions} />
+      <main id="game" tabIndex={-1}>
+        <div className="game-heading">
+          <div>
+            <p className="eyebrow">An encounter with Death</p>
+            <h1>Chess / LM</h1>
           </div>
-          <PlayerBar side="player" status={status} />
-
-          <div className="game-controls" aria-label="Game controls">
-            <button className="control control--primary" type="button" onClick={resetGame}>
-              <Plus aria-hidden="true" />
-              New game
-            </button>
-            <button
-              className="control"
-              type="button"
-              onClick={undoTurn}
-              disabled={thinking || history.length === 0}
+          <span className="edition">Stockfish 18 · Level 8</span>
+        </div>
+        <div className="game-shell">
+          <section className="board-column" aria-label="Chess board">
+            <PlayerBar
+              side={orientation === 'white' ? 'death' : 'player'}
+              status={
+                orientation === 'black'
+                  ? gameStatus(game, engineState)
+                  : undefined
+              }
+            />
+            <div
+              ref={boardRef}
+              tabIndex={-1}
+              className="board-frame"
+              aria-label="Chess board"
             >
-              <Undo2 aria-hidden="true" />
-              Undo
-            </button>
-            <button
-              className="control"
-              type="button"
-              onClick={() => setOrientation((current) => (current === 'white' ? 'black' : 'white'))}
-            >
-              <FlipHorizontal2 aria-hidden="true" />
-              Flip board
-            </button>
-            <button className="control control--sound" type="button" onClick={() => setSoundOn((value) => !value)}>
-              {soundOn ? <Volume2 aria-hidden="true" /> : <VolumeX aria-hidden="true" />}
-              Sound
-            </button>
-          </div>
-          {engineError ? (
-            <div className="engine-error" role="alert">
-              <span>{engineError}</span>
-              <button type="button" onClick={() => window.location.reload()}>
-                <RotateCcw aria-hidden="true" />
-                Reload engine
+              <Chessboard options={boardOptions} />
+            </div>
+            <PlayerBar
+              side={orientation === 'white' ? 'player' : 'death'}
+              status={
+                orientation === 'white'
+                  ? gameStatus(game, engineState)
+                  : undefined
+              }
+            />
+            {promotion ? (
+              <div
+                className="inline-prompt"
+                role="group"
+                aria-label="Choose promotion"
+              >
+                <strong>Promote your pawn</strong>
+                <div className="promotion-options">
+                  {promotionPieces.map(([piece, label], i) => (
+                    <button
+                      ref={i === 0 ? promotionRef : undefined}
+                      key={piece}
+                      type="button"
+                      onClick={() =>
+                        commitPlayerMove(promotion.from, promotion.to, piece)
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPromotion(null)
+                      boardRef.current?.focus()
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {engineError ? (
+              <div className="engine-error" role="alert">
+                <p>{engineError}</p>
+                <button type="button" onClick={() => void restartEngine()}>
+                  <RotateCcw aria-hidden="true" />
+                  Retry engine
+                </button>
+              </div>
+            ) : null}
+            <div className="game-controls" aria-label="Game controls">
+              <button
+                ref={newGameRef}
+                type="button"
+                onClick={() =>
+                  history.length ? setConfirmNew(true) : resetGame()
+                }
+              >
+                <Plus aria-hidden="true" />
+                New game
+              </button>
+              <button
+                type="button"
+                onClick={undoTurn}
+                disabled={!history.length}
+              >
+                <Undo2 aria-hidden="true" />
+                Undo turn
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setOrientation((current) =>
+                    current === 'white' ? 'black' : 'white',
+                  )
+                }
+              >
+                <FlipHorizontal2 aria-hidden="true" />
+                Flip board
               </button>
             </div>
-          ) : null}
-        </section>
-
-        <section className="coach-strip" aria-label="Chess Coach">
-          <ChessCoach coach={coach} onRetry={retryCoach} />
-        </section>
-
-        <Council
-          reading={council}
-          activeGuide={activeGuide}
-          onGuideChange={setActiveGuide}
-          thinking={thinking}
-        />
-
-        <MoveLedger history={history} activeTab={activeTab} onTabChange={setActiveTab} />
+            {confirmNew || pendingImport ? (
+              <div
+                className="inline-prompt"
+                role="group"
+                aria-label={
+                  pendingImport ? 'Open a saved game' : 'Start a new game'
+                }
+              >
+                <p>
+                  {pendingImport
+                    ? 'Open this PGN? Your current saved game will be replaced.'
+                    : 'Start again? Your saved game will be replaced.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    pendingImport ? applyImport(pendingImport) : resetGame()
+                  }
+                >
+                  {pendingImport ? 'Open saved game' : 'Start new game'}
+                </button>
+                <button
+                  ref={keepPlayingRef}
+                  type="button"
+                  onClick={() => {
+                    setConfirmNew(false)
+                    setPendingImport(null)
+                    newGameRef.current?.focus()
+                  }}
+                >
+                  Keep playing
+                </button>
+              </div>
+            ) : null}
+            <details className="board-tools">
+              <summary>More controls</summary>
+              <form
+                className="move-form"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  const move = selectableMoves.find(
+                    (item) => item.san === keyboardMove,
+                  )
+                  if (move)
+                    commitPlayerMove(
+                      move.from,
+                      move.to,
+                      move.promotion as Promotion | undefined,
+                    )
+                }}
+              >
+                <label htmlFor="legal-move">Play by notation</label>
+                <div>
+                  <select
+                    id="legal-move"
+                    value={keyboardMove}
+                    disabled={!playable || !!promotion}
+                    onChange={(event) => setKeyboardMove(event.target.value)}
+                  >
+                    <option value="">Choose a legal move</option>
+                    {playable
+                      ? selectableMoves.map((move) => (
+                          <option value={move.san} key={move.san}>
+                            {move.san} · {move.from} to {move.to}
+                          </option>
+                        ))
+                      : null}
+                  </select>
+                  <button type="submit" disabled={!keyboardMove || !playable}>
+                    Play
+                  </button>
+                </div>
+              </form>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".pgn,text/plain,application/x-chess-pgn"
+                hidden
+                onChange={(event) => {
+                  void importGame(event.target.files?.[0])
+                  event.target.value = ''
+                }}
+              />
+              <div className="secondary-controls">
+                <button type="button" onClick={() => fileRef.current?.click()}>
+                  <Upload aria-hidden="true" />
+                  Open PGN
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={soundOn}
+                  onClick={() => {
+                    soundRef.current = !soundOn
+                    setSoundOn(!soundOn)
+                    playMoveSound()
+                  }}
+                >
+                  {soundOn ? (
+                    <Volume2 aria-hidden="true" />
+                  ) : (
+                    <VolumeX aria-hidden="true" />
+                  )}
+                  Sound {soundOn ? 'on' : 'off'}
+                </button>
+                <button
+                  type="button"
+                  onClick={exportGame}
+                  disabled={!history.length}
+                >
+                  <Download aria-hidden="true" />
+                  Save PGN
+                </button>
+              </div>
+              {importError ? <p role="alert">{importError}</p> : null}
+              <p>
+                {storageAvailable
+                  ? 'Your game resumes in this browser. Download the PGN to keep a copy.'
+                  : 'This browser could not save your game. Download the PGN to keep it.'}
+              </p>
+            </details>
+          </section>
+          <aside className="analysis-column" aria-label="Game analysis">
+            <ChessCoach
+              coach={coach}
+              onRetry={() => {
+                if (lastCoachRequestRef.current)
+                  void runCoach(lastCoachRequestRef.current)
+              }}
+            />
+            <Council reading={council} thinking={thinking} />
+            <MoveLedger
+              history={history}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+            />
+          </aside>
+        </div>
       </main>
-
       <footer className="site-footer">
-        <button type="button" onClick={() => setActiveTab('method')}>
-          How it works
-        </button>
-        <span aria-hidden="true" />
-        <a href="https://github.com/milwrite/chess-lm/blob/main/model/README.md">Model guide</a>
-        <span aria-hidden="true" />
-        <a href="https://github.com/milwrite/chess-lm">Source</a>
+        <span>Play carefully · Read the reasoning</span>
+        <a href="https://github.com/milwrite/chess-lm">
+          Source &amp; credits ↗
+        </a>
       </footer>
     </div>
   )
 }
-
 export default App

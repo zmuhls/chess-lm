@@ -1,77 +1,92 @@
 :root {
-  --ink: #090b0b;
-  --ink-soft: #111414;
-  --ink-raised: #181b1a;
-  --bone: #e1ddd1;
-  --bone-muted: #aaa69b;
-  --rule: rgba(225, 221, 209, 0.24);
-  --rule-strong: rgba(225, 221, 209, 0.42);
-  --oxblood: #91342f;
-  --oxblood-bright: #b64942;
-  --display-font: "Iowan Old Style", "Baskerville", "Times New Roman", serif;
-  --ui-font: "Avenir Next", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  color: var(--bone);
-  background: var(--ink);
+  color-scheme: dark;
+  --ink: #111315;
+  --surface: #191c1f;
+  --text: #f2f2ed;
+  --muted: #a4aaad;
+  --rule: #343a3e;
+  --focus: #f3c76b;
+  --arcade: linear-gradient(110deg, #79e4ed, #b894f0 38%, #f49cbb 68%, #f3cc80);
+  --ui-font: 'Avenir Next', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-family: var(--ui-font);
+  color: var(--text);
+  background: var(--ink);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
-
 * {
   box-sizing: border-box;
 }
-
-html {
-  min-width: 320px;
-  min-height: 100%;
-  background: var(--ink);
-  scroll-behavior: smooth;
-}
-
 body {
   min-width: 320px;
-  min-height: 100vh;
   margin: 0;
-  background: var(--ink);
 }
-
 button,
-a {
+select,
+a,
+summary {
   -webkit-tap-highlight-color: transparent;
 }
-
-button {
-  color: inherit;
+button,
+select {
   font: inherit;
+  color: inherit;
 }
-
+button,
+summary {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
 a {
   color: inherit;
+  text-underline-offset: 4px;
 }
-
 button:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--oxblood-bright);
-  outline-offset: 3px;
+a:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
 }
-
+button {
+  min-height: 44px;
+  border: 1px solid var(--rule);
+  background: transparent;
+  padding: 8px 12px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+}
+button svg,
+a svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+button:not(:disabled):hover {
+  background: #282d31;
+  border-color: #777f85;
+}
 ::selection {
-  color: var(--bone);
-  background: var(--oxblood);
+  background: #5b4b65;
+  color: white;
 }
-
 @media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
-  }
-
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
   }
 }

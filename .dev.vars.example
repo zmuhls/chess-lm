@@ -1,0 +1,3 @@
+# Local coach calls require a dedicated CAIL app credential and a reachable Gateway binding
+# Production credentials belong in the Worker secret CAIL_GATEWAY_KEY
+CAIL_GATEWAY_KEY=

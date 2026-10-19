@@ -1,49 +1,24 @@
-name: Deploy GitHub Pages
+name: Validate chess
 
 on:
   push:
-    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
-  test-and-deploy:
-    env:
-      VITE_COACH_API_URL: ${{ vars.COACH_API_URL }}
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Test
-        run: npm test
-      - name: Lint
-        run: npm run lint
-      - name: Build
-        run: npm run build
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run check:worker

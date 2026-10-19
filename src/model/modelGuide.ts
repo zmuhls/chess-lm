@@ -49,7 +49,10 @@ export const MODEL_GUIDES: ModelGuide[] = [
   },
 ]
 
-const counselByRole: Record<GuideId, (line: string, evaluation: string) => string> = {
+const counselByRole: Record<
+  GuideId,
+  (line: string, evaluation: string) => string
+> = {
   witness: (line, evaluation) =>
     `Records ${line} and keeps the position measured at ${evaluation} from White’s side.`,
   knight: (line) =>
@@ -62,29 +65,50 @@ export function buildCouncilReading(
   fen: string,
   analysis: StockfishAnalysis,
 ): CouncilReading {
-  const usableLines = analysis.lines.filter((line) => line.pv.length > 0)
-  const fallback = usableLines[0]
-
-  const advisers = MODEL_GUIDES.map((guide, index) => {
-    const line = usableLines[index] ?? fallback
-    const san = line ? sanLineFromPv(fen, line.pv) : []
-    const continuation = san.length ? san.join(' ') : analysis.bestMove
-    const move = san[0] ?? analysis.bestMove
-    const evaluation = line ? formatEvaluation(fen, line) : '—'
-
-    return {
-      id: guide.id,
-      name: guide.name,
-      move,
-      evaluation,
-      continuation,
-      counsel: counselByRole[guide.id](continuation, evaluation),
-    }
+  // Keep only unique, legal lines actually reported by Stockfish.
+  const seen = new Set<string>()
+  const usableLines = analysis.lines
+    .filter((line) => {
+      const san = sanLineFromPv(fen, line.pv)
+      if (!san.length || seen.has(san[0])) return false
+      seen.add(san[0])
+      return true
+    })
+    .slice(0, 3)
+  if (!usableLines.length) {
+    usableLines.push({
+      depth: 0,
+      multipv: 1,
+      scoreCp: null,
+      mate: null,
+      pv: [analysis.bestMove],
+    })
+  }
+  const advisers = usableLines.flatMap((line, index) => {
+    const san = sanLineFromPv(fen, line.pv)
+    if (!san.length) return []
+    const guide = MODEL_GUIDES[index]
+    const continuation = san.join(' ')
+    const evaluation =
+      line.scoreCp === null && line.mate === null
+        ? '—'
+        : formatEvaluation(fen, line)
+    return [
+      {
+        id: guide.id,
+        name: guide.name,
+        move: san[0],
+        evaluation,
+        continuation,
+        counsel: counselByRole[guide.id](continuation, evaluation),
+      },
+    ]
   })
 
   return {
     advisers,
-    decision: sanLineFromPv(fen, [analysis.bestMove], 1)[0] ?? analysis.bestMove,
+    decision:
+      sanLineFromPv(fen, [analysis.bestMove], 1)[0] ?? analysis.bestMove,
     decisionLine:
       'The engine makes the move. The council explains the pressure without changing the board.',
   }

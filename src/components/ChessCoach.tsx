@@ -1,43 +1,43 @@
-import { BookOpen, RefreshCw } from 'lucide-react'
-import type { CoachState } from '../model/ollamaCoach'
+import { RefreshCw } from 'lucide-react'
+import type { CoachState } from '../model/coachClient'
 
-type ChessCoachProps = {
-  coach: CoachState
-  onRetry: () => void
-}
-
-function modelLabel(model?: string) {
-  if (!model) return 'DeepSeek V4 Flash · Ollama Cloud'
-  return `${model.replace(':cloud', '').replaceAll('-', ' ')} · Ollama Cloud`
-}
-
+type ChessCoachProps = { coach: CoachState; onRetry: () => void }
 export function ChessCoach({ coach, onRetry }: ChessCoachProps) {
   const working = coach.status === 'loading'
-  const canRetry = coach.status === 'ready' || coach.status === 'error'
-
   return (
     <section
       className={`chess-coach chess-coach--${coach.status}`}
       aria-labelledby="chess-coach-title"
     >
-      <div className="chess-coach__heading">
-        <span className="chess-coach__mark" aria-hidden="true">
-          <BookOpen strokeWidth={1.25} />
-        </span>
-        <div>
-          <h3 id="chess-coach-title">Chess Coach</h3>
-          <span>{modelLabel(coach.status === 'ready' ? coach.model : undefined)}</span>
-        </div>
-        <i className="chess-coach__status" aria-hidden="true" />
+      <div className="section-heading">
+        <h2 id="chess-coach-title">Chess coach</h2>
+        <span>Language model</span>
       </div>
-      <p aria-live="polite" aria-busy={working}>
+      <p
+        className="coach-reading"
+        role="status"
+        aria-live="polite"
+        aria-busy={working}
+      >
         {coach.message}
       </p>
-      {canRetry ? (
-        <button type="button" onClick={onRetry}>
-          <RefreshCw aria-hidden="true" />
-          {coach.status === 'error' ? 'Try again' : 'Read again'}
-        </button>
+      <div className="coach-meta">
+        <span>
+          {coach.status === 'ready'
+            ? `${coach.model.replace(':cloud', '').replaceAll('-', ' ')} · CAIL`
+            : 'Engine-grounded commentary'}
+        </span>
+        {coach.status === 'error' ? (
+          <button type="button" onClick={onRetry}>
+            <RefreshCw aria-hidden="true" />
+            Try again
+          </button>
+        ) : null}
+      </div>
+      {coach.status === 'error' ? (
+        <p className="engine-caption">
+          You can keep playing while the coach is unavailable.
+        </p>
       ) : null}
     </section>
   )

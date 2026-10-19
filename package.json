@@ -2,7 +2,7 @@
   "name": "chess-lm",
   "private": true,
   "version": "1.0.0",
-  "description": "A Seventh Seal-inspired chess game with Stockfish Level 8 and an engine-grounded model council.",
+  "description": "Chess against Stockfish with engine-grounded coaching through CAIL on Cloudflare.",
   "license": "GPL-3.0-only",
   "engines": {
     "node": ">=22.12.0"
@@ -10,12 +10,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "start": "node server/index.mjs",
+    "start": "wrangler dev",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run src && node --test server/*.test.mjs && npm run validate:model",
-    "validate:model": "node scripts/validate-model-set.mjs"
+    "test": "vitest run src && node --test worker/*.test.mjs && npm run validate:model",
+    "validate:model": "node scripts/validate-model-set.mjs",
+    "deploy": "npm run build && wrangler deploy",
+    "check:worker": "wrangler deploy --dry-run"
   },
   "dependencies": {
     "chess.js": "^1.4.0",
@@ -33,6 +35,7 @@
     "oxlint": "^1.71.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
-    "vitest": "^3.2.4"
+    "vitest": "5.0.5",
+    "wrangler": "4.151.1"
   }
 }

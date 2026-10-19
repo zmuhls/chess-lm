@@ -1,13 +1,15 @@
 import type { Move } from 'chess.js'
-import { MODEL_GUIDES } from '../model/modelGuide'
 
 type MoveLedgerProps = {
   history: Move[]
   activeTab: 'moves' | 'method'
   onTabChange: (tab: 'moves' | 'method') => void
 }
-
-export function MoveLedger({ history, activeTab, onTabChange }: MoveLedgerProps) {
+export function MoveLedger({
+  history,
+  activeTab,
+  onTabChange,
+}: MoveLedgerProps) {
   const pairs: Array<{ number: number; white?: string; black?: string }> = []
   history.forEach((move, index) => {
     const pairIndex = Math.floor(index / 2)
@@ -15,64 +17,100 @@ export function MoveLedger({ history, activeTab, onTabChange }: MoveLedgerProps)
     if (move.color === 'w') pairs[pairIndex].white = move.san
     else pairs[pairIndex].black = move.san
   })
-
   return (
-    <section className="ledger" id="method" aria-label="Game record and method">
+    <section className="ledger" aria-label="Game record and method">
       <div className="ledger-tabs" role="tablist" aria-label="Game details">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'moves'}
-          onClick={() => onTabChange('moves')}
-        >
-          Moves
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'method'}
-          onClick={() => onTabChange('method')}
-        >
-          Method
-        </button>
+        {(['moves', 'method'] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            id={`${tab}-tab`}
+            role="tab"
+            aria-controls={`${tab}-panel`}
+            aria-selected={activeTab === tab}
+            tabIndex={activeTab === tab ? 0 : -1}
+            onClick={() => onTabChange(tab)}
+            onKeyDown={(event) => {
+              if (
+                ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)
+              ) {
+                event.preventDefault()
+                const next =
+                  event.key === 'Home'
+                    ? 'moves'
+                    : event.key === 'End'
+                      ? 'method'
+                      : tab === 'moves'
+                        ? 'method'
+                        : 'moves'
+                onTabChange(next)
+                document.getElementById(`${next}-tab`)?.focus()
+              }
+            }}
+          >
+            {tab === 'moves' ? 'Moves' : 'How it works'}
+          </button>
+        ))}
       </div>
-
       {activeTab === 'moves' ? (
-        <div className="move-record" role="tabpanel">
+        <div
+          className="move-record"
+          id="moves-panel"
+          role="tabpanel"
+          aria-labelledby="moves-tab"
+          tabIndex={0}
+        >
           {pairs.length ? (
-            <ol>
-              {pairs.map((pair) => (
-                <li key={pair.number}>
-                  <span>{pair.number}.</span>
-                  <strong>{pair.white}</strong>
-                  <strong className="black-move">{pair.black}</strong>
-                </li>
-              ))}
-            </ol>
+            <>
+              <div className="move-columns" aria-hidden="true">
+                <span>Turn</span>
+                <span>You</span>
+                <span>Death</span>
+              </div>
+              <ol>
+                {pairs.map((pair) => (
+                  <li key={pair.number}>
+                    <span>{pair.number}</span>
+                    <strong>{pair.white}</strong>
+                    <strong>{pair.black ?? '…'}</strong>
+                  </li>
+                ))}
+              </ol>
+            </>
           ) : (
-            <p>Move a white piece to begin.</p>
+            <p className="empty-state">
+              Tap a white piece, then a destination. You can also drag pieces or
+              use notation in More controls.
+            </p>
           )}
         </div>
       ) : (
-        <div className="method-copy" role="tabpanel">
+        <div
+          className="method-copy"
+          id="method-panel"
+          role="tabpanel"
+          aria-labelledby="method-tab"
+          tabIndex={0}
+        >
           <p>
-            Stockfish 18 owns the legal move and runs at UCI Skill Level 8. Its
-            three principal variations become bounded briefs for the advisers and
-            Chess Coach. DeepSeek explains the position, while engine output
-            alone changes the board.
+            You play White against Death, powered by Stockfish 18 at Skill Level
+            8. Stockfish checks legal moves in your browser and chooses every
+            reply.
           </p>
-          <ul>
-            {MODEL_GUIDES.map((guide) => (
-              <li key={guide.id}>
-                <strong>{guide.name}</strong>
-                <span>{guide.brief}</span>
-              </li>
-            ))}
-            <li>
-              <strong>Chess Coach</strong>
-              <span>Turns supplied engine lines into a practical plan for your next turn.</span>
-            </li>
-          </ul>
+          <p>
+            Engine lines show up to three candidate replies from the position
+            before Death moved. Scores are measured for White; a positive number
+            favors you, and M indicates a forced mate at the searched depth.
+          </p>
+          <p>
+            The coach sends your position, recent moves, and engine lines to a
+            language model through the CUNY AI Lab’s Cloudflare gateway. Its explanations can be
+            mistaken. Compare them with the board and the supplied lines.
+          </p>
+          <p>
+            Your game saves in this browser. Save PGN downloads the complete
+            move record for study or another chess program.
+          </p>
         </div>
       )}
     </section>

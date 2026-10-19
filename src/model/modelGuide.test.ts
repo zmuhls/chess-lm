@@ -17,7 +17,11 @@ const analysis: StockfishAnalysis = {
 describe('model council', () => {
   it('maps every role to a legal engine line', () => {
     const reading = buildCouncilReading(fen, analysis)
-    expect(reading.advisers.map((adviser) => adviser.move)).toEqual(['c5', 'e5', 'Nf6'])
+    expect(reading.advisers.map((adviser) => adviser.move)).toEqual([
+      'c5',
+      'e5',
+      'Nf6',
+    ])
     expect(reading.decision).toBe('c5')
   })
 
@@ -26,5 +30,34 @@ describe('model council', () => {
     for (const guide of MODEL_GUIDES) {
       expect(guide.systemPrompt).toMatch(/supplied candidate/)
     }
+  })
+})
+
+describe('constrained endings', () => {
+  it('does not pad a single candidate with duplicate moves', () => {
+    const reading = buildCouncilReading(fen, {
+      ...analysis,
+      lines: analysis.lines.slice(0, 1),
+    })
+    expect(reading.advisers.map((item) => item.move)).toEqual(['c5'])
+  })
+  it('deduplicates repeated PVs and omits illegal candidates', () => {
+    const reading = buildCouncilReading(fen, {
+      ...analysis,
+      lines: [
+        analysis.lines[0],
+        analysis.lines[0],
+        { ...analysis.lines[1], pv: ['a1a8'] },
+      ],
+    })
+    expect(reading.advisers.map((item) => item.move)).toEqual(['c5'])
+  })
+  it('converts a bestmove-only reply to legal SAN without inventing a score', () => {
+    const reading = buildCouncilReading(fen, { ...analysis, lines: [] })
+    expect(reading.advisers[0]).toMatchObject({
+      move: 'c5',
+      continuation: 'c5',
+      evaluation: '—',
+    })
   })
 })
