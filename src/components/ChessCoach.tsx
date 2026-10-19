@@ -24,7 +24,7 @@ export function ChessCoach({ coach, onRetry }: ChessCoachProps) {
       <div className="coach-meta">
         <span>
           {coach.status === 'ready'
-            ? `${coach.model.replace(':cloud', '').replaceAll('-', ' ')} · CAIL`
+            ? `${coach.model.includes('gemma-4-26b') ? 'Gemma 4 26B' : coach.model} · CAIL`
             : 'Engine-grounded commentary'}
         </span>
         {coach.status === 'error' ? (

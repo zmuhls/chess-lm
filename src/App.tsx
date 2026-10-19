@@ -425,7 +425,11 @@ function App() {
       targetSquare ? commitPlayerMove(sourceSquare, targetSquare) : false,
     onSquareClick: ({ square }) => chooseSquare(square),
     canDragPiece: ({ piece }) =>
-      playable && !promotion && !confirmNew && !pendingImport && piece.pieceType.startsWith('w'),
+      playable &&
+      !promotion &&
+      !confirmNew &&
+      !pendingImport &&
+      piece.pieceType.startsWith('w'),
     squareStyles,
     allowDrawingArrows: true,
     animationDurationInMs: reducedMotion ? 0 : 160,
@@ -714,9 +718,7 @@ function App() {
       </main>
       <footer className="site-footer">
         <span>Play carefully · Read the reasoning</span>
-        <a href="https://github.com/milwrite/chess-lm">
-          Source &amp; credits ↗
-        </a>
+        <a href="https://github.com/zmuhls/chess-lm">Source &amp; credits ↗</a>
       </footer>
     </div>
   )

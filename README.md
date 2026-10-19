@@ -2,9 +2,9 @@
 
 Play White against Death, powered by Stockfish 18 at Skill Level 8. Compare the engine’s candidate replies with a language model’s explanation of the turn.
 
-**Cloudflare deployment target:** [chess-lm.ailab-452.workers.dev](https://chess-lm.ailab-452.workers.dev/)
+**Live game:** [chess-lm.ailab-452.workers.dev](https://chess-lm.ailab-452.workers.dev/)
 
-The application and coach API deploy together as one Cloudflare Worker. This address is the configured target; a successful deployment and real coaching response must be verified for each release.
+The application and coach API run together on Cloudflare. Desktop and mobile release checks confirmed real Gemma 4 coaching through CAIL on 2026-10-19. Repeat the actual coaching check for each release.
 
 ## Playing
 
